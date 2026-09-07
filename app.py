@@ -33,6 +33,13 @@ def load_data(file_bytes):
     repeat_df = pd.read_excel(xls, sheet_name='Repeat')
     mttr_df = pd.read_excel(xls, sheet_name='MTTR')
     
+    # Standardize Date Columns across all DataFrames
+    for df in [base_df, denial_df, repeat_df, mttr_df]:
+        d_cols = [c for c in df.columns if 'date' in str(c).lower() or 'dt' in str(c).lower() or 'state' in str(c).lower()]
+        if d_cols:
+            df.rename(columns={d_cols[0]: 'Date_Col_Standard'}, inplace=True)
+            df['Date_Col_Standard'] = pd.to_datetime(df['Date_Col_Standard'], errors='coerce').dt.strftime('%Y-%m-%d')
+
     # Cleaning Numeric Columns
     numeric_keywords = ['Repeated', 'leadtime', 'SRs', 'HSI', 'BB', 'PSTN', 'IPTV', 'Count', 'DENIAL', 'CLAIMED']
     for df in [repeat_df, mttr_df, denial_df, base_df]:
@@ -49,15 +56,11 @@ base_df, denial_df, repeat_df, mttr_df = load_data(uploaded_file)
 # ------------------------------------------
 st.sidebar.header("🔍 Dynamic Filters")
 
-# 1. Date Filter (Detect Date Column)
-date_cols = [c for c in base_df.columns if 'date' in c.lower() or 'dt' in c.lower() or 'state' in c.lower()]
-if date_cols:
-    date_col = date_cols[0]
-    base_df[date_col] = pd.to_datetime(base_df[date_col]).dt.strftime('%Y-%m-%d')
-    available_dates = sorted(base_df[date_col].dropna().unique(), reverse=True)
+# 1. Date Filter
+if 'Date_Col_Standard' in base_df.columns:
+    available_dates = sorted(base_df['Date_Col_Standard'].dropna().unique(), reverse=True)
     selected_date = st.sidebar.selectbox("Select Date", available_dates)
 else:
-    date_col = None
     selected_date = None
 
 # Filter Raw Data vs Summary Data
@@ -86,13 +89,11 @@ def get_dashboard_subset(df):
     temp = df.copy()
     
     # 1. Apply Date Filter
-    if date_col and date_col in temp.columns and selected_date:
-        temp[date_col] = pd.to_datetime(temp[date_col]).dt.strftime('%Y-%m-%d')
-        temp = temp[temp[date_col] == selected_date]
+    if 'Date_Col_Standard' in temp.columns and selected_date:
+        temp = temp[temp['Date_Col_Standard'] == selected_date]
 
     # 2. NATIONAL / ZONE / REGION SELECTION LOGIC
     if selected_zone == "All" and selected_region == "All":
-        # Check if NATIONAL summary row exists to avoid sum errors
         nat_row = temp[temp['CRM_REGION_NM'] == 'NATIONAL']
         if not nat_row.empty:
             return nat_row
@@ -100,7 +101,6 @@ def get_dashboard_subset(df):
             return temp[~temp['CRM_REGION_NM'].isin(summary_names)]
             
     elif selected_zone != "All" and selected_region == "All":
-        # Check if Zone level summary row exists (e.g. NORTH / CENTRAL)
         zone_summary = temp[temp['CRM_REGION_NM'] == selected_zone]
         if not zone_summary.empty:
             return zone_summary
@@ -108,7 +108,6 @@ def get_dashboard_subset(df):
             return temp[temp['Zone_Region'] == selected_zone]
             
     else:
-        # Region level filter (exact region row)
         return temp[temp['CRM_REGION_NM'] == selected_region]
 
 f_base = get_dashboard_subset(base_df)
@@ -222,16 +221,16 @@ with tab2:
     st.subheader("🗺️ Region-Wise Performance Summary")
     
     # Clean raw regional data for breakdown table
-    if selected_date and date_col:
-        raw_reg_base = base_df[(base_df[date_col] == selected_date) & (~base_df['CRM_REGION_NM'].isin(summary_names))]
-        raw_reg_mttr = mttr_df[(mttr_df[date_col] == selected_date) & (~mttr_df['CRM_REGION_NM'].isin(summary_names))]
-        raw_reg_repeat = repeat_df[(repeat_df[date_col] == selected_date) & (~repeat_df['CRM_REGION_NM'].isin(summary_names))]
-        raw_reg_denial = denial_df[(denial_df[date_col] == selected_date) & (~denial_df['CRM_REGION_NM'].isin(summary_names))]
-    else:
-        raw_reg_base = base_df[~base_df['CRM_REGION_NM'].isin(summary_names)]
-        raw_reg_mttr = mttr_df[~mttr_df['CRM_REGION_NM'].isin(summary_names)]
-        raw_reg_repeat = repeat_df[~repeat_df['CRM_REGION_NM'].isin(summary_names)]
-        raw_reg_denial = denial_df[~denial_df['CRM_REGION_NM'].isin(summary_names)]
+    def filter_raw_reg(df):
+        temp = df[~df['CRM_REGION_NM'].isin(summary_names)]
+        if selected_date and 'Date_Col_Standard' in temp.columns:
+            temp = temp[temp['Date_Col_Standard'] == selected_date]
+        return temp
+
+    raw_reg_base = filter_raw_reg(base_df)
+    raw_reg_mttr = filter_raw_reg(mttr_df)
+    raw_reg_repeat = filter_raw_reg(repeat_df)
+    raw_reg_denial = filter_raw_reg(denial_df)
 
     reg_summary = []
     for reg in raw_reg_base['CRM_REGION_NM'].dropna().unique():
