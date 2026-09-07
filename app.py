@@ -3,15 +3,21 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="PTCL Executive SSC Dashboard", layout="wide")
-
-# Custom Styling
-st.markdown("<style>.metric-card {background-color: #f8f9fa; border-radius: 10px; padding: 15px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);}</style>", unsafe_allow_html=True)
+# ------------------------------------------
+# PAGE CONFIG & STYLING
+# ------------------------------------------
+st.set_page_config(
+    page_title="PTCL Executive SSC Dashboard",
+    page_icon="🇵🇰",
+    layout="wide"
+)
 
 st.title("🇵🇰 PTCL Daily SSC Complaint & Quality Analytics Dashboard")
 st.caption("Comprehensive GPON vs Copper Performance Tracking | MTTR, Denial %, Repeat %, & 100 Per Line Rate")
 
-# File Uploader
+# ------------------------------------------
+# FILE UPLOADER & DATA LOAD
+# ------------------------------------------
 st.sidebar.header("📁 Data Source")
 uploaded_file = st.sidebar.file_uploader("Upload Excel Dashboard File", type=["xlsx"])
 
@@ -19,7 +25,7 @@ if uploaded_file is None:
     st.info("👈 Please upload the 'Daily SSC Dashboard Data' Excel file from the sidebar to launch the dashboard.")
     st.stop()
 
-@st.cache_data
+@st.cache_data(show_spinner="Processing Dashboard Data...")
 def load_data(file_bytes):
     xls = pd.ExcelFile(file_bytes)
     base_df = pd.read_excel(xls, sheet_name='Base')
@@ -27,11 +33,11 @@ def load_data(file_bytes):
     repeat_df = pd.read_excel(xls, sheet_name='Repeat')
     mttr_df = pd.read_excel(xls, sheet_name='MTTR')
     
-    # Cleaning numeric columns safely
+    # Cleaning Numeric Columns
+    numeric_keywords = ['Repeated', 'leadtime', 'SRs', 'HSI', 'BB', 'PSTN', 'IPTV', 'Count', 'DENIAL', 'CLAIMED']
     for df in [repeat_df, mttr_df, denial_df, base_df]:
         for col in df.columns:
-            col_str = str(col)
-            if any(k in col_str for k in ['Repeated', 'leadtime', 'SRs', 'HSI', 'BB', 'PSTN', 'IPTV', 'Count', 'DENIAL', 'CLAIMED']):
+            if any(k in str(col) for k in numeric_keywords):
                 df[col] = pd.to_numeric(df[col].replace('?', 0), errors='coerce').fillna(0)
                 
     return base_df, denial_df, repeat_df, mttr_df
@@ -39,18 +45,32 @@ def load_data(file_bytes):
 base_df, denial_df, repeat_df, mttr_df = load_data(uploaded_file)
 
 # ------------------------------------------
-# FILTERS: ZONE & REGION
+# FILTERS: DATE, ZONE & REGION
 # ------------------------------------------
-st.sidebar.header("🔍 Filters")
+st.sidebar.header("🔍 Dynamic Filters")
 
-# Clean raw data to exclude summary rows for filtering
-valid_base = base_df[~base_df['CRM_REGION_NM'].isin(['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH'])].copy()
+# 1. Date Filter (Detect Date Column)
+date_cols = [c for c in base_df.columns if 'date' in c.lower() or 'dt' in c.lower() or 'state' in c.lower()]
+if date_cols:
+    date_col = date_cols[0]
+    base_df[date_col] = pd.to_datetime(base_df[date_col]).dt.strftime('%Y-%m-%d')
+    available_dates = sorted(base_df[date_col].dropna().unique(), reverse=True)
+    selected_date = st.sidebar.selectbox("Select Date", available_dates)
+else:
+    date_col = None
+    selected_date = None
 
-# Zone Filter
+# Filter Raw Data vs Summary Data
+summary_names = ['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH']
+
+# Raw regional records (excluding pre-aggregated rows)
+valid_base = base_df[~base_df['CRM_REGION_NM'].isin(summary_names)].copy()
+
+# Zone Selector
 zones = ["All"] + sorted(list(valid_base['Zone_Region'].dropna().unique()))
 selected_zone = st.sidebar.selectbox("Select Zone", zones)
 
-# Region Filter (Dependent on Zone selection)
+# Region Selector
 if selected_zone != "All":
     available_regions = sorted(list(valid_base[valid_base['Zone_Region'] == selected_zone]['CRM_REGION_NM'].dropna().unique()))
 else:
@@ -59,19 +79,42 @@ else:
 regions = ["All"] + available_regions
 selected_region = st.sidebar.selectbox("Select Region", regions)
 
-# Filter Function
-def filter_df(df):
-    temp = df[~df['CRM_REGION_NM'].isin(['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH'])].copy()
-    if selected_zone != "All":
-        temp = temp[temp['Zone_Region'] == selected_zone]
-    if selected_region != "All":
-        temp = temp[temp['CRM_REGION_NM'] == selected_region]
-    return temp
+# ------------------------------------------
+# ACCURATE FILTERING & AGGREGATION LOGIC
+# ------------------------------------------
+def get_dashboard_subset(df):
+    temp = df.copy()
+    
+    # 1. Apply Date Filter
+    if date_col and date_col in temp.columns and selected_date:
+        temp[date_col] = pd.to_datetime(temp[date_col]).dt.strftime('%Y-%m-%d')
+        temp = temp[temp[date_col] == selected_date]
 
-f_base = filter_df(base_df)
-f_denial = filter_df(denial_df)
-f_repeat = filter_df(repeat_df)
-f_mttr = filter_df(mttr_df)
+    # 2. NATIONAL / ZONE / REGION SELECTION LOGIC
+    if selected_zone == "All" and selected_region == "All":
+        # Check if NATIONAL summary row exists to avoid sum errors
+        nat_row = temp[temp['CRM_REGION_NM'] == 'NATIONAL']
+        if not nat_row.empty:
+            return nat_row
+        else:
+            return temp[~temp['CRM_REGION_NM'].isin(summary_names)]
+            
+    elif selected_zone != "All" and selected_region == "All":
+        # Check if Zone level summary row exists (e.g. NORTH / CENTRAL)
+        zone_summary = temp[temp['CRM_REGION_NM'] == selected_zone]
+        if not zone_summary.empty:
+            return zone_summary
+        else:
+            return temp[temp['Zone_Region'] == selected_zone]
+            
+    else:
+        # Region level filter (exact region row)
+        return temp[temp['CRM_REGION_NM'] == selected_region]
+
+f_base = get_dashboard_subset(base_df)
+f_denial = get_dashboard_subset(denial_df)
+f_repeat = get_dashboard_subset(repeat_df)
+f_mttr = get_dashboard_subset(mttr_df)
 
 # ------------------------------------------
 # METRIC CALCULATIONS
@@ -102,7 +145,7 @@ closed_copper = f_mttr['BB_SRs'].sum() + f_mttr['PSTN_SRs'].sum() + f_mttr['IPTV
 lt_gpon = f_mttr['HSI_leadtime'].sum() + f_mttr['PSTN_GPON_leadtime'].sum() + f_mttr['IPTV_GPON_leadtime'].sum()
 lt_copper = f_mttr['BB_leadtime'].sum() + f_mttr['PSTN_leadtime'].sum() + f_mttr['IPTV_leadtime'].sum()
 
-# Rates
+# Rates Calculation
 mttr_gpon = (lt_gpon / 3600 / closed_gpon) if closed_gpon > 0 else 0
 mttr_copper = (lt_copper / 3600 / closed_copper) if closed_copper > 0 else 0
 
@@ -115,7 +158,7 @@ repeat_rate_copper = (repeat_copper / srs_copper * 100) if srs_copper > 0 else 0
 per_100_gpon = (srs_gpon / base_gpon * 100) if base_gpon > 0 else 0
 per_100_copper = (srs_copper / base_copper * 100) if base_copper > 0 else 0
 
-# Totals
+# Aggregates
 total_base = base_gpon + base_copper
 total_srs = srs_gpon + srs_copper
 total_closed = closed_gpon + closed_copper
@@ -161,30 +204,41 @@ with tab1:
     c1, c2 = st.columns(2)
     with c1:
         fig1 = go.Figure(data=[
-            go.Bar(name='GPON', x=['MTTR (Hours)', '100 Per Line'], y=[mttr_gpon, per_100_gpon], marker_color='#00CC96'),
-            go.Bar(name='Copper', x=['MTTR (Hours)', '100 Per Line'], y=[mttr_copper, per_100_copper], marker_color='#EF553B')
+            go.Bar(name='GPON', x=['MTTR (Hours)', '100 Per Line'], y=[mttr_gpon, per_100_gpon], marker_color='#00CC96', texttemplate='%{y:.2f}', textposition='outside'),
+            go.Bar(name='Copper', x=['MTTR (Hours)', '100 Per Line'], y=[mttr_copper, per_100_copper], marker_color='#EF553B', texttemplate='%{y:.2f}', textposition='outside')
         ])
-        fig1.update_layout(barmode='group', title="MTTR vs 100 Per Line Rate")
+        fig1.update_layout(barmode='group', title="MTTR vs 100 Per Line Rate", template="plotly_white")
         st.plotly_chart(fig1, use_container_width=True)
 
     with c2:
         fig2 = go.Figure(data=[
-            go.Bar(name='GPON', x=['Denial %', 'Repeat %'], y=[denial_rate_gpon, repeat_rate_gpon], marker_color='#00CC96'),
-            go.Bar(name='Copper', x=['Denial %', 'Repeat %'], y=[denial_rate_copper, repeat_rate_copper], marker_color='#EF553B')
+            go.Bar(name='GPON', x=['Denial %', 'Repeat %'], y=[denial_rate_gpon, repeat_rate_gpon], marker_color='#00CC96', texttemplate='%{y:.2f}%', textposition='outside'),
+            go.Bar(name='Copper', x=['Denial %', 'Repeat %'], y=[denial_rate_copper, repeat_rate_copper], marker_color='#EF553B', texttemplate='%{y:.2f}%', textposition='outside')
         ])
-        fig2.update_layout(barmode='group', title="Denial % vs Repeat %")
+        fig2.update_layout(barmode='group', title="Denial % vs Repeat %", template="plotly_white")
         st.plotly_chart(fig2, use_container_width=True)
 
 with tab2:
-    st.subheader("🗺️ Region-Wise Performance Metrics")
+    st.subheader("🗺️ Region-Wise Performance Summary")
     
-    # Calculating Region-level aggregations
+    # Clean raw regional data for breakdown table
+    if selected_date and date_col:
+        raw_reg_base = base_df[(base_df[date_col] == selected_date) & (~base_df['CRM_REGION_NM'].isin(summary_names))]
+        raw_reg_mttr = mttr_df[(mttr_df[date_col] == selected_date) & (~mttr_df['CRM_REGION_NM'].isin(summary_names))]
+        raw_reg_repeat = repeat_df[(repeat_df[date_col] == selected_date) & (~repeat_df['CRM_REGION_NM'].isin(summary_names))]
+        raw_reg_denial = denial_df[(denial_df[date_col] == selected_date) & (~denial_df['CRM_REGION_NM'].isin(summary_names))]
+    else:
+        raw_reg_base = base_df[~base_df['CRM_REGION_NM'].isin(summary_names)]
+        raw_reg_mttr = mttr_df[~mttr_df['CRM_REGION_NM'].isin(summary_names)]
+        raw_reg_repeat = repeat_df[~repeat_df['CRM_REGION_NM'].isin(summary_names)]
+        raw_reg_denial = denial_df[~denial_df['CRM_REGION_NM'].isin(summary_names)]
+
     reg_summary = []
-    for reg in f_base['CRM_REGION_NM'].unique():
-        b_sub = f_base[f_base['CRM_REGION_NM'] == reg]
-        m_sub = f_mttr[f_mttr['CRM_REGION_NM'] == reg]
-        r_sub = f_repeat[f_repeat['CRM_REGION_NM'] == reg]
-        d_sub = f_denial[f_denial['CRM_REGION_NM'] == reg]
+    for reg in raw_reg_base['CRM_REGION_NM'].dropna().unique():
+        b_sub = raw_reg_base[raw_reg_base['CRM_REGION_NM'] == reg]
+        m_sub = raw_reg_mttr[raw_reg_mttr['CRM_REGION_NM'] == reg]
+        r_sub = raw_reg_repeat[raw_reg_repeat['CRM_REGION_NM'] == reg]
+        d_sub = raw_reg_denial[raw_reg_denial['CRM_REGION_NM'] == reg]
         
         r_base = b_sub['HSI_GPON_Count'].sum() + b_sub['PSTN_GPON_Count'].sum() + b_sub['IPTV_GPON_Count'].sum() + b_sub['Broadband_Count'].sum() + b_sub['PSTN_Count'].sum() + b_sub['IPTV_Count'].sum()
         r_srs = r_sub['HSI'].sum() + r_sub['PSTN_GPON'].sum() + r_sub['IPTV_GPON'].sum() + r_sub['BB'].sum() + r_sub['PSTN'].sum() + r_sub['IPTV'].sum()
@@ -214,14 +268,12 @@ with tab2:
     rdf = pd.DataFrame(reg_summary).sort_values(by="Total SRs", ascending=False)
     st.dataframe(rdf, use_container_width=True, hide_index=True)
     
-    # Regional Visual Comparisons
-    fig_reg = px.bar(rdf, x="Region", y=["MTTR (Hrs)", "100 Per Line"], barmode="group", title="Regional Comparison: MTTR vs 100 Per Line Rate")
+    fig_reg = px.bar(rdf, x="Region", y=["MTTR (Hrs)", "100 Per Line"], barmode="group", title="Regional Comparison: MTTR vs 100 Per Line Rate", template="plotly_white")
     st.plotly_chart(fig_reg, use_container_width=True)
 
 with tab3:
     st.subheader("🛠️ Granular Service-Wise Breakdown")
     
-    # Service Breakdown Dataframe
     svc_data = {
         "Service": ["GPON Broadband (HSI)", "GPON PSTN", "GPON IPTV", "Copper Broadband (BB)", "Copper PSTN", "Copper IPTV"],
         "Active Base": [
@@ -243,11 +295,10 @@ with tab3:
     }
     svc_df = pd.DataFrame(svc_data)
     
-    # Calculate Service Level Rates safely
     svc_df['Repeat %'] = (svc_df['Repeated SRs'] / svc_df['Complaints (SRs)'] * 100).fillna(0).round(2)
     svc_df['100 Per Line'] = (svc_df['Complaints (SRs)'] / svc_df['Active Base'] * 100).fillna(0).round(2)
     
     st.dataframe(svc_df, use_container_width=True, hide_index=True)
     
-    fig_svc = px.pie(svc_df, values='Complaints (SRs)', names='Service', title='Share of Complaints by Service Category', hole=0.4)
+    fig_svc = px.pie(svc_df, values='Complaints (SRs)', names='Service', title='Share of Complaints by Service Category', hole=0.4, template="plotly_white")
     st.plotly_chart(fig_svc, use_container_width=True)
