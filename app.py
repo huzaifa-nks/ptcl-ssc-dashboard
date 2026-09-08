@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 st.title("🇵🇰 PTCL Daily SSC Complaint & Quality Analytics Dashboard")
-st.caption("Comprehensive GPON vs Copper Performance Tracking | MTTR, Denial %, Repeat %, & 100 Per Line Rate")
+st.caption("Granular Product-Wise & Technology Tracking | MTTR, Denial %, Repeat %, & 100 Per Line Rate")
 
 # ------------------------------------------
 # FILE UPLOADER & DATA LOAD
@@ -62,10 +62,7 @@ if 'Date_Col_Standard' in base_df.columns:
 else:
     selected_date = None
 
-# Summary row names list
 summary_names = ['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH', 'TOTAL', 'NATIONAL TOTAL']
-
-# Valid regional rows for filter lists
 valid_base = base_df[~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
 
 # Zone Selector
@@ -82,34 +79,29 @@ regions = ["All"] + available_regions
 selected_region = st.sidebar.selectbox("Select Region", regions)
 
 # ------------------------------------------
-# ACCURATE FILTERING & BASE SELECTION LOGIC
+# ACCURATE SUBSET LOGIC
 # ------------------------------------------
-# 1. Base Subset Logic (Uses exact NATIONAL / Zone summary row if available)
 def get_base_subset(df):
     temp = df.copy()
     if 'Date_Col_Standard' in temp.columns and selected_date:
         temp = temp[temp['Date_Col_Standard'] == selected_date]
 
     if selected_zone == "All" and selected_region == "All":
-        # National Official Row
         nat_row = temp[temp['CRM_REGION_NM'].astype(str).str.strip().str.upper() == 'NATIONAL']
         if not nat_row.empty:
-            return nat_row
+            return nat_row.iloc[[0]]
         else:
             return temp[~temp['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
             
     elif selected_zone != "All" and selected_region == "All":
-        # Zone Summary Row if available
         zone_row = temp[temp['CRM_REGION_NM'].astype(str).str.strip().str.upper() == selected_zone.upper()]
         if not zone_row.empty:
-            return zone_row
+            return zone_row.iloc[[0]]
         else:
             return temp[temp['Zone_Region'] == selected_zone]
     else:
-        # Exact Region Row
         return temp[temp['CRM_REGION_NM'] == selected_region]
 
-# 2. Activity Subset Logic (Denial, Repeat, MTTR aggregate from regional rows)
 def get_activity_subset(df):
     temp = df[~df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
     if 'Date_Col_Standard' in temp.columns and selected_date:
@@ -127,44 +119,88 @@ f_repeat = get_activity_subset(repeat_df)
 f_mttr = get_activity_subset(mttr_df)
 
 # ------------------------------------------
-# METRIC CALCULATIONS
+# PRODUCT-WISE INDIVIDUAL CALCULATIONS
 # ------------------------------------------
-# Product-Wise Base Counts (Directly from matched row/subset)
-hsi_gpon_base = f_base['HSI_GPON_Count'].sum()
-pstn_gpon_base = f_base['PSTN_GPON_Count'].sum()
-iptv_gpon_base = f_base['IPTV_GPON_Count'].sum()
+# 1. GPON Broadband (HSI)
+base_hsi = f_base['HSI_GPON_Count'].sum()
+srs_hsi = f_repeat['HSI'].sum()
+rep_hsi = f_repeat['HSI_Repeated'].sum()
+claim_hsi = f_denial['HSI_CLAIMED'].sum()
+denial_hsi = f_denial['HSI_OBD_DENIAL'].sum()
+closed_hsi = f_mttr['HSI_SRs'].sum()
+lt_hsi = f_mttr['HSI_leadtime'].sum()
 
-broadband_copper_base = f_base['Broadband_Count'].sum()
-pstn_copper_base = f_base['PSTN_Count'].sum()
-iptv_copper_base = f_base['IPTV_Count'].sum()
+# 2. GPON PSTN
+base_pstn_gpon = f_base['PSTN_GPON_Count'].sum()
+srs_pstn_gpon = f_repeat['PSTN_GPON'].sum()
+rep_pstn_gpon = f_repeat['PSTN_GPON_Repeated'].sum()
+claim_pstn_gpon = f_denial['PSTN_GPON_CLAIMED'].sum()
+denial_pstn_gpon = f_denial['PSTN_GPON_OBD_DENIAL'].sum()
+closed_pstn_gpon = f_mttr['PSTN_GPON_SRs'].sum()
+lt_pstn_gpon = f_mttr['PSTN_GPON_leadtime'].sum()
 
-# Tech Grouping Base
-base_gpon = hsi_gpon_base + pstn_gpon_base + iptv_gpon_base
-base_copper = broadband_copper_base + pstn_copper_base + iptv_copper_base
+# 3. GPON IPTV
+base_iptv_gpon = f_base['IPTV_GPON_Count'].sum()
+srs_iptv_gpon = f_repeat['IPTV_GPON'].sum()
+rep_iptv_gpon = f_repeat['IPTV_GPON_Repeated'].sum()
+claim_iptv_gpon = f_denial['IPTV_GPON_CLAIMED'].sum()
+denial_iptv_gpon = f_denial['IPTV_GPON_OBD_DENIAL'].sum()
+closed_iptv_gpon = f_mttr['IPTV_GPON_SRs'].sum()
+lt_iptv_gpon = f_mttr['IPTV_GPON_leadtime'].sum()
 
-# SRs (Complaints)
-srs_gpon = f_repeat['HSI'].sum() + f_repeat['PSTN_GPON'].sum() + f_repeat['IPTV_GPON'].sum()
-srs_copper = f_repeat['BB'].sum() + f_repeat['PSTN'].sum() + f_repeat['IPTV'].sum()
+# 4. Copper Broadband (BB)
+base_bb = f_base['Broadband_Count'].sum()
+srs_bb = f_repeat['BB'].sum()
+rep_bb = f_repeat['BB_Repeated'].sum()
+claim_bb = f_denial['BB_CLAIMED'].sum()
+denial_bb = f_denial['BB_OBD_DENIAL'].sum()
+closed_bb = f_mttr['BB_SRs'].sum()
+lt_bb = f_mttr['BB_leadtime'].sum()
 
-# Repeat Complaints
-repeat_gpon = f_repeat['HSI_Repeated'].sum() + f_repeat['PSTN_GPON_Repeated'].sum() + f_repeat['IPTV_GPON_Repeated'].sum()
-repeat_copper = f_repeat['BB_Repeated'].sum() + f_repeat['PSTN_Repeated'].sum() + f_repeat['IPTV_Repeated'].sum()
+# 5. Copper PSTN
+base_pstn = f_base['PSTN_Count'].sum()
+srs_pstn = f_repeat['PSTN'].sum()
+rep_pstn = f_repeat['PSTN_Repeated'].sum()
+claim_pstn = f_denial['PSTN_CLAIMED'].sum()
+denial_pstn = f_denial['PSTN_OBD_DENIAL'].sum()
+closed_pstn = f_mttr['PSTN_SRs'].sum()
+lt_pstn = f_mttr['PSTN_leadtime'].sum()
 
-# Denial Metrics
-claim_gpon = f_denial['HSI_CLAIMED'].sum() + f_denial['PSTN_GPON_CLAIMED'].sum() + f_denial['IPTV_GPON_CLAIMED'].sum()
-claim_copper = f_denial['BB_CLAIMED'].sum() + f_denial['PSTN_CLAIMED'].sum() + f_denial['IPTV_CLAIMED'].sum()
+# 6. Copper IPTV
+base_iptv = f_base['IPTV_Count'].sum()
+srs_iptv = f_repeat['IPTV'].sum()
+rep_iptv = f_repeat['IPTV_Repeated'].sum()
+claim_iptv = f_denial['IPTV_CLAIMED'].sum()
+denial_iptv = f_denial['IPTV_OBD_DENIAL'].sum()
+closed_iptv = f_mttr['IPTV_SRs'].sum()
+lt_iptv = f_mttr['IPTV_leadtime'].sum()
 
-denial_gpon = f_denial['HSI_OBD_DENIAL'].sum() + f_denial['PSTN_GPON_OBD_DENIAL'].sum() + f_denial['IPTV_GPON_OBD_DENIAL'].sum()
-denial_copper = f_denial['BB_OBD_DENIAL'].sum() + f_denial['PSTN_OBD_DENIAL'].sum() + f_denial['IPTV_OBD_DENIAL'].sum()
+# ------------------------------------------
+# AGGREGATIONS (GPON vs COPPER vs OVERALL)
+# ------------------------------------------
+# Tech Group Aggregates
+base_gpon = base_hsi + base_pstn_gpon + base_iptv_gpon
+base_copper = base_bb + base_pstn + base_iptv
 
-# MTTR Metrics
-closed_gpon = f_mttr['HSI_SRs'].sum() + f_mttr['PSTN_GPON_SRs'].sum() + f_mttr['IPTV_GPON_SRs'].sum()
-closed_copper = f_mttr['BB_SRs'].sum() + f_mttr['PSTN_SRs'].sum() + f_mttr['IPTV_SRs'].sum()
+srs_gpon = srs_hsi + srs_pstn_gpon + srs_iptv_gpon
+srs_copper = srs_bb + srs_pstn + srs_iptv
 
-lt_gpon = f_mttr['HSI_leadtime'].sum() + f_mttr['PSTN_GPON_leadtime'].sum() + f_mttr['IPTV_GPON_leadtime'].sum()
-lt_copper = f_mttr['BB_leadtime'].sum() + f_mttr['PSTN_leadtime'].sum() + f_mttr['IPTV_leadtime'].sum()
+repeat_gpon = rep_hsi + rep_pstn_gpon + rep_iptv_gpon
+repeat_copper = rep_bb + rep_pstn + rep_iptv
 
-# Rates Calculation
+claim_gpon = claim_hsi + claim_pstn_gpon + claim_iptv_gpon
+claim_copper = claim_bb + claim_pstn + claim_iptv
+
+denial_gpon = denial_hsi + denial_pstn_gpon + denial_iptv_gpon
+denial_copper = denial_bb + denial_pstn + denial_iptv
+
+closed_gpon = closed_hsi + closed_pstn_gpon + closed_iptv_gpon
+closed_copper = closed_bb + closed_pstn + closed_iptv
+
+lt_gpon = lt_hsi + lt_pstn_gpon + lt_iptv_gpon
+lt_copper = lt_bb + lt_pstn + lt_iptv
+
+# Technology Level Rates
 mttr_gpon = (lt_gpon / 3600 / closed_gpon) if closed_gpon > 0 else 0
 mttr_copper = (lt_copper / 3600 / closed_copper) if closed_copper > 0 else 0
 
@@ -177,7 +213,7 @@ repeat_rate_copper = (repeat_copper / srs_copper * 100) if srs_copper > 0 else 0
 per_100_gpon = (srs_gpon / base_gpon * 100) if base_gpon > 0 else 0
 per_100_copper = (srs_copper / base_copper * 100) if base_copper > 0 else 0
 
-# Aggregates
+# Grand Totals
 total_base = base_gpon + base_copper
 total_srs = srs_gpon + srs_copper
 total_closed = closed_gpon + closed_copper
@@ -208,7 +244,7 @@ st.markdown("---")
 # ------------------------------------------
 # DASHBOARD TABS
 # ------------------------------------------
-tab1, tab2, tab3 = st.tabs(["⚡ Technology Comparison (GPON vs Copper)", "🗺️ Region-Wise Deep Dive", "🛠️ Service Breakdown (BB / PSTN / IPTV)"])
+tab1, tab2, tab3 = st.tabs(["⚡ Technology Comparison (GPON vs Copper)", "🛠️ Product-Wise Granular Breakdown", "🗺️ Region-Wise Deep Dive"])
 
 with tab1:
     st.subheader("GPON vs Copper Performance Summary")
@@ -238,6 +274,39 @@ with tab1:
         st.plotly_chart(fig2, use_container_width=True)
 
 with tab2:
+    st.subheader("🛠️ Product-Wise Complete Performance Matrix")
+    
+    # Building exact product-level dataframe
+    products_data = [
+        {"Product": "GPON Broadband (HSI)", "Tech": "GPON", "Base": base_hsi, "SRs": srs_hsi, "Closed": closed_hsi, "LeadTime": lt_hsi, "Claimed": claim_hsi, "Denials": denial_hsi, "Repeats": rep_hsi},
+        {"Product": "GPON PSTN", "Tech": "GPON", "Base": base_pstn_gpon, "SRs": srs_pstn_gpon, "Closed": closed_pstn_gpon, "LeadTime": lt_pstn_gpon, "Claimed": claim_pstn_gpon, "Denials": denial_pstn_gpon, "Repeats": rep_pstn_gpon},
+        {"Product": "GPON IPTV", "Tech": "GPON", "Base": base_iptv_gpon, "SRs": srs_iptv_gpon, "Closed": closed_iptv_gpon, "LeadTime": lt_iptv_gpon, "Claimed": claim_iptv_gpon, "Denials": denial_iptv_gpon, "Repeats": rep_iptv_gpon},
+        {"Product": "Copper Broadband (BB)", "Tech": "Copper", "Base": base_bb, "SRs": srs_bb, "Closed": closed_bb, "LeadTime": lt_bb, "Claimed": claim_bb, "Denials": denial_bb, "Repeats": rep_bb},
+        {"Product": "Copper PSTN", "Tech": "Copper", "Base": base_pstn, "SRs": srs_pstn, "Closed": closed_pstn, "LeadTime": lt_pstn, "Claimed": claim_pstn, "Denials": denial_pstn, "Repeats": rep_pstn},
+        {"Product": "Copper IPTV", "Tech": "Copper", "Base": base_iptv, "SRs": srs_iptv, "Closed": closed_iptv, "LeadTime": lt_iptv, "Claimed": claim_iptv, "Denials": denial_iptv, "Repeats": rep_iptv},
+    ]
+    
+    p_df = pd.DataFrame(products_data)
+    
+    # Calculate exact ratios per product
+    p_df['MTTR (Hrs)'] = (p_df['LeadTime'] / 3600 / p_df['Closed']).fillna(0).round(2)
+    p_df['Denial %'] = (p_df['Denials'] / p_df['Claimed'] * 100).fillna(0).round(2)
+    p_df['Repeat %'] = (p_df['Repeats'] / p_df['SRs'] * 100).fillna(0).round(2)
+    p_df['100 Per Line'] = (p_df['SRs'] / p_df['Base'] * 100).fillna(0).round(2)
+    
+    # Display formatted table
+    disp_p_df = p_df[['Product', 'Tech', 'Base', 'SRs', 'Repeats', 'Denials', 'MTTR (Hrs)', 'Denial %', 'Repeat %', '100 Per Line']].copy()
+    disp_p_df['Base'] = disp_p_df['Base'].map('{:,.0f}'.format)
+    disp_p_df['SRs'] = disp_p_df['SRs'].map('{:,.0f}'.format)
+    disp_p_df['Repeats'] = disp_p_df['Repeats'].map('{:,.0f}'.format)
+    disp_p_df['Denials'] = disp_p_df['Denials'].map('{:,.0f}'.format)
+    
+    st.dataframe(disp_p_df, use_container_width=True, hide_index=True)
+    
+    fig_p_rate = px.bar(p_df, x='Product', y='100 Per Line', color='Tech', title='100 Per Line Rate by Specific Product', template="plotly_white", text_auto=True)
+    st.plotly_chart(fig_p_rate, use_container_width=True)
+
+with tab3:
     st.subheader("🗺️ Region-Wise Performance Summary")
 
     reg_summary = []
@@ -282,35 +351,3 @@ with tab2:
     
     fig_reg = px.bar(rdf, x="Region", y=["MTTR (Hrs)", "100 Per Line"], barmode="group", title="Regional Comparison: MTTR vs 100 Per Line Rate", template="plotly_white")
     st.plotly_chart(fig_reg, use_container_width=True)
-
-with tab3:
-    st.subheader("🛠️ Granular Service-Wise Breakdown")
-    
-    svc_data = {
-        "Service": ["GPON Broadband (HSI)", "GPON PSTN", "GPON IPTV", "Copper Broadband (BB)", "Copper PSTN", "Copper IPTV"],
-        "Active Base": [
-            hsi_gpon_base, pstn_gpon_base, iptv_gpon_base,
-            broadband_copper_base, pstn_copper_base, iptv_copper_base
-        ],
-        "Complaints (SRs)": [
-            f_repeat['HSI'].sum(), f_repeat['PSTN_GPON'].sum(), f_repeat['IPTV_GPON'].sum(),
-            f_repeat['BB'].sum(), f_repeat['PSTN'].sum(), f_repeat['IPTV'].sum()
-        ],
-        "Repeated SRs": [
-            f_repeat['HSI_Repeated'].sum(), f_repeat['PSTN_GPON_Repeated'].sum(), f_repeat['IPTV_GPON_Repeated'].sum(),
-            f_repeat['BB_Repeated'].sum(), f_repeat['PSTN_Repeated'].sum(), f_repeat['IPTV_Repeated'].sum()
-        ],
-        "OBD Denials": [
-            f_denial['HSI_OBD_DENIAL'].sum(), f_denial['PSTN_GPON_OBD_DENIAL'].sum(), f_denial['IPTV_GPON_OBD_DENIAL'].sum(),
-            f_denial['BB_OBD_DENIAL'].sum(), f_denial['PSTN_OBD_DENIAL'].sum(), f_denial['IPTV_OBD_DENIAL'].sum()
-        ]
-    }
-    svc_df = pd.DataFrame(svc_data)
-    
-    svc_df['Repeat %'] = (svc_df['Repeated SRs'] / svc_df['Complaints (SRs)'] * 100).fillna(0).round(2)
-    svc_df['100 Per Line'] = (svc_df['Complaints (SRs)'] / svc_df['Active Base'] * 100).fillna(0).round(2)
-    
-    st.dataframe(svc_df, use_container_width=True, hide_index=True)
-    
-    fig_svc = px.pie(svc_df, values='Complaints (SRs)', names='Service', title='Share of Complaints by Service Category', hole=0.4, template="plotly_white")
-    st.plotly_chart(fig_svc, use_container_width=True)
