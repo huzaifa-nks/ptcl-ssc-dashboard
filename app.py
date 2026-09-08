@@ -50,49 +50,61 @@ def load_data(file_bytes):
 
 base_df, denial_df, repeat_df, mttr_df = load_data(uploaded_file)
 
-# Summary Rows to strip out across ALL calculations to eliminate double counting
-summary_keywords = ['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH', 'TOTAL']
+summary_names = ['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH', 'TOTAL', 'NATIONAL TOTAL']
 
-def filter_summary_rows(df):
-    if 'CRM_REGION_NM' in df.columns:
-        mask = df['CRM_REGION_NM'].astype(str).str.upper().str.strip().apply(lambda x: any(k in x for k in summary_keywords))
-        return df[~mask].copy()
-    return df.copy()
-
-clean_base = filter_summary_rows(base_df)
-clean_denial = filter_summary_rows(denial_df)
-clean_repeat = filter_summary_rows(repeat_df)
-clean_mttr = filter_summary_rows(mttr_df)
+# Filtered list for UI dropdowns
+valid_base = base_df[~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
 
 # ------------------------------------------
 # FILTERS: DATE, ZONE & REGION
 # ------------------------------------------
 st.sidebar.header("🔍 Dynamic Filters")
 
-if 'Date_Col_Standard' in clean_base.columns:
-    available_dates = sorted(clean_base['Date_Col_Standard'].dropna().unique(), reverse=True)
+if 'Date_Col_Standard' in base_df.columns:
+    available_dates = sorted(base_df['Date_Col_Standard'].dropna().unique(), reverse=True)
     selected_date = st.sidebar.selectbox("Select Date", available_dates)
 else:
     selected_date = None
 
 # Zone Selector
-zones = ["All"] + sorted([str(z) for z in clean_base['Zone_Region'].dropna().unique() if pd.notna(z)])
+zones = ["All"] + sorted([str(z) for z in valid_base['Zone_Region'].dropna().unique() if pd.notna(z)])
 selected_zone = st.sidebar.selectbox("Select Zone", zones)
 
 # Region Selector
 if selected_zone != "All":
-    available_regions = sorted([str(r) for r in clean_base[clean_base['Zone_Region'] == selected_zone]['CRM_REGION_NM'].dropna().unique() if pd.notna(r)])
+    available_regions = sorted([str(r) for r in valid_base[valid_base['Zone_Region'] == selected_zone]['CRM_REGION_NM'].dropna().unique() if pd.notna(r)])
 else:
-    available_regions = sorted([str(r) for r in clean_base['CRM_REGION_NM'].dropna().unique() if pd.notna(r)])
+    available_regions = sorted([str(r) for r in valid_base['CRM_REGION_NM'].dropna().unique() if pd.notna(r)])
 
 regions = ["All"] + available_regions
 selected_region = st.sidebar.selectbox("Select Region", regions)
 
 # ------------------------------------------
-# SUBSET FILTERING LOGIC
+# EXACT BASE & ACTIVITY FILTERING LOGIC
 # ------------------------------------------
-def get_filtered_subset(df):
+def get_base_subset(df):
     temp = df.copy()
+    if 'Date_Col_Standard' in temp.columns and selected_date:
+        temp = temp[temp['Date_Col_Standard'] == selected_date]
+
+    if selected_zone == "All" and selected_region == "All":
+        nat_row = temp[temp['CRM_REGION_NM'].astype(str).str.strip().str.upper() == 'NATIONAL']
+        if not nat_row.empty:
+            return nat_row.iloc[[0]]
+        else:
+            return temp[~temp['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+            
+    elif selected_zone != "All" and selected_region == "All":
+        zone_row = temp[temp['CRM_REGION_NM'].astype(str).str.strip().str.upper() == selected_zone.upper()]
+        if not zone_row.empty:
+            return zone_row.iloc[[0]]
+        else:
+            return temp[temp['Zone_Region'] == selected_zone]
+    else:
+        return temp[temp['CRM_REGION_NM'] == selected_region]
+
+def get_activity_subset(df):
+    temp = df[~df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
     if 'Date_Col_Standard' in temp.columns and selected_date:
         temp = temp[temp['Date_Col_Standard'] == selected_date]
 
@@ -102,10 +114,10 @@ def get_filtered_subset(df):
         temp = temp[temp['CRM_REGION_NM'] == selected_region]
     return temp
 
-f_base = get_filtered_subset(clean_base)
-f_denial = get_filtered_subset(clean_denial)
-f_repeat = get_filtered_subset(clean_repeat)
-f_mttr = get_filtered_subset(clean_mttr)
+f_base = get_base_subset(base_df)
+f_denial = get_activity_subset(denial_df)
+f_repeat = get_activity_subset(repeat_df)
+f_mttr = get_activity_subset(mttr_df)
 
 # ------------------------------------------
 # PRODUCT-WISE INDIVIDUAL CALCULATIONS
@@ -291,10 +303,10 @@ with tab3:
     st.subheader("🗺️ Region-Wise Performance Summary")
 
     reg_summary = []
-    reg_base = get_filtered_subset(clean_base)
-    reg_mttr = get_filtered_subset(clean_mttr)
-    reg_repeat = get_filtered_subset(clean_repeat)
-    reg_denial = get_filtered_subset(clean_denial)
+    reg_base = base_df[(base_df['Date_Col_Standard'] == selected_date) & (~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else base_df[~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+    reg_mttr = mttr_df[(mttr_df['Date_Col_Standard'] == selected_date) & (~mttr_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else mttr_df[~mttr_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+    reg_repeat = repeat_df[(repeat_df['Date_Col_Standard'] == selected_date) & (~repeat_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else repeat_df[~repeat_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+    reg_denial = denial_df[(denial_df['Date_Col_Standard'] == selected_date) & (~denial_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else denial_df[~denial_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
 
     for reg in sorted(reg_base['CRM_REGION_NM'].dropna().unique()):
         b_sub = reg_base[reg_base['CRM_REGION_NM'] == reg]
