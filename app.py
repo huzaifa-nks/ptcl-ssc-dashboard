@@ -33,31 +33,20 @@ def load_data(file_bytes):
     repeat_df = pd.read_excel(xls, sheet_name='Repeat')
     mttr_df = pd.read_excel(xls, sheet_name='MTTR')
 
-    summary_names = ['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH']
-    
-    cleaned_dfs = []
     for df in [base_df, denial_df, repeat_df, mttr_df]:
-        # 1. Standardize Date Columns across all sheets
+        # Standardize Date Columns
         d_cols = [c for c in df.columns if 'date' in str(c).lower() or 'dt' in str(c).lower() or 'state' in str(c).lower()]
         if d_cols:
             df.rename(columns={d_cols[0]: 'Date_Col_Standard'}, inplace=True)
             df['Date_Col_Standard'] = pd.to_datetime(df['Date_Col_Standard'], errors='coerce').dt.strftime('%Y-%m-%d')
 
-        # 2. Clean Numeric Columns
+        # Clean Numeric Columns
         numeric_keywords = ['Repeated', 'leadtime', 'SRs', 'HSI', 'BB', 'PSTN', 'IPTV', 'Count', 'DENIAL', 'CLAIMED', 'Broadband']
         for col in df.columns:
             if any(k in str(col) for k in numeric_keywords):
                 df[col] = pd.to_numeric(df[col].replace('?', 0), errors='coerce').fillna(0)
-        
-        # 3. Filter out pre-aggregated summary rows to avoid DOUBLE COUNTING
-        if 'CRM_REGION_NM' in df.columns:
-            df_clean = df[~df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
-        else:
-            df_clean = df.copy()
-            
-        cleaned_dfs.append(df_clean)
 
-    return cleaned_dfs[0], cleaned_dfs[1], cleaned_dfs[2], cleaned_dfs[3]
+    return base_df, denial_df, repeat_df, mttr_df
 
 base_df, denial_df, repeat_df, mttr_df = load_data(uploaded_file)
 
@@ -73,49 +62,85 @@ if 'Date_Col_Standard' in base_df.columns:
 else:
     selected_date = None
 
+# Summary row names list
+summary_names = ['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH', 'TOTAL', 'NATIONAL TOTAL']
+
+# Valid regional rows for filter lists
+valid_base = base_df[~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
+
 # Zone Selector
-zones = ["All"] + sorted([str(z) for z in base_df['Zone_Region'].dropna().unique()])
+zones = ["All"] + sorted([str(z) for z in valid_base['Zone_Region'].dropna().unique()])
 selected_zone = st.sidebar.selectbox("Select Zone", zones)
 
 # Region Selector
 if selected_zone != "All":
-    available_regions = sorted([str(r) for r in base_df[base_df['Zone_Region'] == selected_zone]['CRM_REGION_NM'].dropna().unique()])
+    available_regions = sorted([str(r) for r in valid_base[valid_base['Zone_Region'] == selected_zone]['CRM_REGION_NM'].dropna().unique()])
 else:
-    available_regions = sorted([str(r) for r in base_df['CRM_REGION_NM'].dropna().unique()])
+    available_regions = sorted([str(r) for r in valid_base['CRM_REGION_NM'].dropna().unique()])
 
 regions = ["All"] + available_regions
 selected_region = st.sidebar.selectbox("Select Region", regions)
 
 # ------------------------------------------
-# ACCURATE FILTERING LOGIC
+# ACCURATE FILTERING & BASE SELECTION LOGIC
 # ------------------------------------------
-def get_dashboard_subset(df):
+# 1. Base Subset Logic (Uses exact NATIONAL / Zone summary row if available)
+def get_base_subset(df):
     temp = df.copy()
-    
-    # 1. Apply Date Filter
     if 'Date_Col_Standard' in temp.columns and selected_date:
         temp = temp[temp['Date_Col_Standard'] == selected_date]
 
-    # 2. Zone & Region Filter
+    if selected_zone == "All" and selected_region == "All":
+        # National Official Row
+        nat_row = temp[temp['CRM_REGION_NM'].astype(str).str.strip().str.upper() == 'NATIONAL']
+        if not nat_row.empty:
+            return nat_row
+        else:
+            return temp[~temp['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+            
+    elif selected_zone != "All" and selected_region == "All":
+        # Zone Summary Row if available
+        zone_row = temp[temp['CRM_REGION_NM'].astype(str).str.strip().str.upper() == selected_zone.upper()]
+        if not zone_row.empty:
+            return zone_row
+        else:
+            return temp[temp['Zone_Region'] == selected_zone]
+    else:
+        # Exact Region Row
+        return temp[temp['CRM_REGION_NM'] == selected_region]
+
+# 2. Activity Subset Logic (Denial, Repeat, MTTR aggregate from regional rows)
+def get_activity_subset(df):
+    temp = df[~df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
+    if 'Date_Col_Standard' in temp.columns and selected_date:
+        temp = temp[temp['Date_Col_Standard'] == selected_date]
+
     if selected_zone != "All":
         temp = temp[temp['Zone_Region'] == selected_zone]
-        
     if selected_region != "All":
         temp = temp[temp['CRM_REGION_NM'] == selected_region]
-
     return temp
 
-f_base = get_dashboard_subset(base_df)
-f_denial = get_dashboard_subset(denial_df)
-f_repeat = get_dashboard_subset(repeat_df)
-f_mttr = get_dashboard_subset(mttr_df)
+f_base = get_base_subset(base_df)
+f_denial = get_activity_subset(denial_df)
+f_repeat = get_activity_subset(repeat_df)
+f_mttr = get_activity_subset(mttr_df)
 
 # ------------------------------------------
 # METRIC CALCULATIONS
 # ------------------------------------------
-# Active Base
-base_gpon = f_base['HSI_GPON_Count'].sum() + f_base['PSTN_GPON_Count'].sum() + f_base['IPTV_GPON_Count'].sum()
-base_copper = f_base['Broadband_Count'].sum() + f_base['PSTN_Count'].sum() + f_base['IPTV_Count'].sum()
+# Product-Wise Base Counts (Directly from matched row/subset)
+hsi_gpon_base = f_base['HSI_GPON_Count'].sum()
+pstn_gpon_base = f_base['PSTN_GPON_Count'].sum()
+iptv_gpon_base = f_base['IPTV_GPON_Count'].sum()
+
+broadband_copper_base = f_base['Broadband_Count'].sum()
+pstn_copper_base = f_base['PSTN_Count'].sum()
+iptv_copper_base = f_base['IPTV_Count'].sum()
+
+# Tech Grouping Base
+base_gpon = hsi_gpon_base + pstn_gpon_base + iptv_gpon_base
+base_copper = broadband_copper_base + pstn_copper_base + iptv_copper_base
 
 # SRs (Complaints)
 srs_gpon = f_repeat['HSI'].sum() + f_repeat['PSTN_GPON'].sum() + f_repeat['IPTV_GPON'].sum()
@@ -216,11 +241,10 @@ with tab2:
     st.subheader("🗺️ Region-Wise Performance Summary")
 
     reg_summary = []
-    # Filter regional data by selected date
-    reg_base = base_df[base_df['Date_Col_Standard'] == selected_date] if selected_date else base_df
-    reg_mttr = mttr_df[mttr_df['Date_Col_Standard'] == selected_date] if selected_date else mttr_df
-    reg_repeat = repeat_df[repeat_df['Date_Col_Standard'] == selected_date] if selected_date else repeat_df
-    reg_denial = denial_df[denial_df['Date_Col_Standard'] == selected_date] if selected_date else denial_df
+    reg_base = base_df[(base_df['Date_Col_Standard'] == selected_date) & (~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else base_df[~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+    reg_mttr = mttr_df[(mttr_df['Date_Col_Standard'] == selected_date) & (~mttr_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else mttr_df[~mttr_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+    reg_repeat = repeat_df[(repeat_df['Date_Col_Standard'] == selected_date) & (~repeat_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else repeat_df[~repeat_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+    reg_denial = denial_df[(denial_df['Date_Col_Standard'] == selected_date) & (~denial_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else denial_df[~denial_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
 
     for reg in sorted(reg_base['CRM_REGION_NM'].dropna().unique()):
         b_sub = reg_base[reg_base['CRM_REGION_NM'] == reg]
@@ -265,8 +289,8 @@ with tab3:
     svc_data = {
         "Service": ["GPON Broadband (HSI)", "GPON PSTN", "GPON IPTV", "Copper Broadband (BB)", "Copper PSTN", "Copper IPTV"],
         "Active Base": [
-            f_base['HSI_GPON_Count'].sum(), f_base['PSTN_GPON_Count'].sum(), f_base['IPTV_GPON_Count'].sum(),
-            f_base['Broadband_Count'].sum(), f_base['PSTN_Count'].sum(), f_base['IPTV_Count'].sum()
+            hsi_gpon_base, pstn_gpon_base, iptv_gpon_base,
+            broadband_copper_base, pstn_copper_base, iptv_copper_base
         ],
         "Complaints (SRs)": [
             f_repeat['HSI'].sum(), f_repeat['PSTN_GPON'].sum(), f_repeat['IPTV_GPON'].sum(),
