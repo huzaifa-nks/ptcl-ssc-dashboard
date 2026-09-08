@@ -50,60 +50,49 @@ def load_data(file_bytes):
 
 base_df, denial_df, repeat_df, mttr_df = load_data(uploaded_file)
 
+# Summary Rows to strip out across ALL calculations to eliminate double counting
+summary_keywords = ['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH', 'TOTAL']
+
+def filter_summary_rows(df):
+    if 'CRM_REGION_NM' in df.columns:
+        mask = df['CRM_REGION_NM'].astype(str).str.upper().str.strip().apply(lambda x: any(k in x for k in summary_keywords))
+        return df[~mask].copy()
+    return df.copy()
+
+clean_base = filter_summary_rows(base_df)
+clean_denial = filter_summary_rows(denial_df)
+clean_repeat = filter_summary_rows(repeat_df)
+clean_mttr = filter_summary_rows(mttr_df)
+
 # ------------------------------------------
 # FILTERS: DATE, ZONE & REGION
 # ------------------------------------------
 st.sidebar.header("🔍 Dynamic Filters")
 
-# Date Filter
-if 'Date_Col_Standard' in base_df.columns:
-    available_dates = sorted(base_df['Date_Col_Standard'].dropna().unique(), reverse=True)
+if 'Date_Col_Standard' in clean_base.columns:
+    available_dates = sorted(clean_base['Date_Col_Standard'].dropna().unique(), reverse=True)
     selected_date = st.sidebar.selectbox("Select Date", available_dates)
 else:
     selected_date = None
 
-summary_names = ['NATIONAL', 'CENTRAL', 'NORTH', 'SOUTH', 'TOTAL', 'NATIONAL TOTAL']
-valid_base = base_df[~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
-
 # Zone Selector
-zones = ["All"] + sorted([str(z) for z in valid_base['Zone_Region'].dropna().unique()])
+zones = ["All"] + sorted([str(z) for z in clean_base['Zone_Region'].dropna().unique() if pd.notna(z)])
 selected_zone = st.sidebar.selectbox("Select Zone", zones)
 
 # Region Selector
 if selected_zone != "All":
-    available_regions = sorted([str(r) for r in valid_base[valid_base['Zone_Region'] == selected_zone]['CRM_REGION_NM'].dropna().unique()])
+    available_regions = sorted([str(r) for r in clean_base[clean_base['Zone_Region'] == selected_zone]['CRM_REGION_NM'].dropna().unique() if pd.notna(r)])
 else:
-    available_regions = sorted([str(r) for r in valid_base['CRM_REGION_NM'].dropna().unique()])
+    available_regions = sorted([str(r) for r in clean_base['CRM_REGION_NM'].dropna().unique() if pd.notna(r)])
 
 regions = ["All"] + available_regions
 selected_region = st.sidebar.selectbox("Select Region", regions)
 
 # ------------------------------------------
-# ACCURATE SUBSET LOGIC
+# SUBSET FILTERING LOGIC
 # ------------------------------------------
-def get_base_subset(df):
+def get_filtered_subset(df):
     temp = df.copy()
-    if 'Date_Col_Standard' in temp.columns and selected_date:
-        temp = temp[temp['Date_Col_Standard'] == selected_date]
-
-    if selected_zone == "All" and selected_region == "All":
-        nat_row = temp[temp['CRM_REGION_NM'].astype(str).str.strip().str.upper() == 'NATIONAL']
-        if not nat_row.empty:
-            return nat_row.iloc[[0]]
-        else:
-            return temp[~temp['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
-            
-    elif selected_zone != "All" and selected_region == "All":
-        zone_row = temp[temp['CRM_REGION_NM'].astype(str).str.strip().str.upper() == selected_zone.upper()]
-        if not zone_row.empty:
-            return zone_row.iloc[[0]]
-        else:
-            return temp[temp['Zone_Region'] == selected_zone]
-    else:
-        return temp[temp['CRM_REGION_NM'] == selected_region]
-
-def get_activity_subset(df):
-    temp = df[~df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)].copy()
     if 'Date_Col_Standard' in temp.columns and selected_date:
         temp = temp[temp['Date_Col_Standard'] == selected_date]
 
@@ -113,15 +102,15 @@ def get_activity_subset(df):
         temp = temp[temp['CRM_REGION_NM'] == selected_region]
     return temp
 
-f_base = get_base_subset(base_df)
-f_denial = get_activity_subset(denial_df)
-f_repeat = get_activity_subset(repeat_df)
-f_mttr = get_activity_subset(mttr_df)
+f_base = get_filtered_subset(clean_base)
+f_denial = get_filtered_subset(clean_denial)
+f_repeat = get_filtered_subset(clean_repeat)
+f_mttr = get_filtered_subset(clean_mttr)
 
 # ------------------------------------------
 # PRODUCT-WISE INDIVIDUAL CALCULATIONS
 # ------------------------------------------
-# 1. GPON Broadband (HSI)
+# GPON Broadband (HSI)
 base_hsi = f_base['HSI_GPON_Count'].sum()
 srs_hsi = f_repeat['HSI'].sum()
 rep_hsi = f_repeat['HSI_Repeated'].sum()
@@ -130,7 +119,7 @@ denial_hsi = f_denial['HSI_OBD_DENIAL'].sum()
 closed_hsi = f_mttr['HSI_SRs'].sum()
 lt_hsi = f_mttr['HSI_leadtime'].sum()
 
-# 2. GPON PSTN
+# GPON PSTN
 base_pstn_gpon = f_base['PSTN_GPON_Count'].sum()
 srs_pstn_gpon = f_repeat['PSTN_GPON'].sum()
 rep_pstn_gpon = f_repeat['PSTN_GPON_Repeated'].sum()
@@ -139,7 +128,7 @@ denial_pstn_gpon = f_denial['PSTN_GPON_OBD_DENIAL'].sum()
 closed_pstn_gpon = f_mttr['PSTN_GPON_SRs'].sum()
 lt_pstn_gpon = f_mttr['PSTN_GPON_leadtime'].sum()
 
-# 3. GPON IPTV
+# GPON IPTV
 base_iptv_gpon = f_base['IPTV_GPON_Count'].sum()
 srs_iptv_gpon = f_repeat['IPTV_GPON'].sum()
 rep_iptv_gpon = f_repeat['IPTV_GPON_Repeated'].sum()
@@ -148,7 +137,7 @@ denial_iptv_gpon = f_denial['IPTV_GPON_OBD_DENIAL'].sum()
 closed_iptv_gpon = f_mttr['IPTV_GPON_SRs'].sum()
 lt_iptv_gpon = f_mttr['IPTV_GPON_leadtime'].sum()
 
-# 4. Copper Broadband (BB)
+# Copper Broadband (BB)
 base_bb = f_base['Broadband_Count'].sum()
 srs_bb = f_repeat['BB'].sum()
 rep_bb = f_repeat['BB_Repeated'].sum()
@@ -157,7 +146,7 @@ denial_bb = f_denial['BB_OBD_DENIAL'].sum()
 closed_bb = f_mttr['BB_SRs'].sum()
 lt_bb = f_mttr['BB_leadtime'].sum()
 
-# 5. Copper PSTN
+# Copper PSTN
 base_pstn = f_base['PSTN_Count'].sum()
 srs_pstn = f_repeat['PSTN'].sum()
 rep_pstn = f_repeat['PSTN_Repeated'].sum()
@@ -166,7 +155,7 @@ denial_pstn = f_denial['PSTN_OBD_DENIAL'].sum()
 closed_pstn = f_mttr['PSTN_SRs'].sum()
 lt_pstn = f_mttr['PSTN_leadtime'].sum()
 
-# 6. Copper IPTV
+# Copper IPTV
 base_iptv = f_base['IPTV_Count'].sum()
 srs_iptv = f_repeat['IPTV'].sum()
 rep_iptv = f_repeat['IPTV_Repeated'].sum()
@@ -178,7 +167,6 @@ lt_iptv = f_mttr['IPTV_leadtime'].sum()
 # ------------------------------------------
 # AGGREGATIONS (GPON vs COPPER vs OVERALL)
 # ------------------------------------------
-# Tech Group Aggregates
 base_gpon = base_hsi + base_pstn_gpon + base_iptv_gpon
 base_copper = base_bb + base_pstn + base_iptv
 
@@ -200,7 +188,7 @@ closed_copper = closed_bb + closed_pstn + closed_iptv
 lt_gpon = lt_hsi + lt_pstn_gpon + lt_iptv_gpon
 lt_copper = lt_bb + lt_pstn + lt_iptv
 
-# Technology Level Rates
+# Tech Rates
 mttr_gpon = (lt_gpon / 3600 / closed_gpon) if closed_gpon > 0 else 0
 mttr_copper = (lt_copper / 3600 / closed_copper) if closed_copper > 0 else 0
 
@@ -276,7 +264,6 @@ with tab1:
 with tab2:
     st.subheader("🛠️ Product-Wise Complete Performance Matrix")
     
-    # Building exact product-level dataframe
     products_data = [
         {"Product": "GPON Broadband (HSI)", "Tech": "GPON", "Base": base_hsi, "SRs": srs_hsi, "Closed": closed_hsi, "LeadTime": lt_hsi, "Claimed": claim_hsi, "Denials": denial_hsi, "Repeats": rep_hsi},
         {"Product": "GPON PSTN", "Tech": "GPON", "Base": base_pstn_gpon, "SRs": srs_pstn_gpon, "Closed": closed_pstn_gpon, "LeadTime": lt_pstn_gpon, "Claimed": claim_pstn_gpon, "Denials": denial_pstn_gpon, "Repeats": rep_pstn_gpon},
@@ -287,14 +274,11 @@ with tab2:
     ]
     
     p_df = pd.DataFrame(products_data)
-    
-    # Calculate exact ratios per product
     p_df['MTTR (Hrs)'] = (p_df['LeadTime'] / 3600 / p_df['Closed']).fillna(0).round(2)
     p_df['Denial %'] = (p_df['Denials'] / p_df['Claimed'] * 100).fillna(0).round(2)
     p_df['Repeat %'] = (p_df['Repeats'] / p_df['SRs'] * 100).fillna(0).round(2)
     p_df['100 Per Line'] = (p_df['SRs'] / p_df['Base'] * 100).fillna(0).round(2)
     
-    # Display formatted table
     disp_p_df = p_df[['Product', 'Tech', 'Base', 'SRs', 'Repeats', 'Denials', 'MTTR (Hrs)', 'Denial %', 'Repeat %', '100 Per Line']].copy()
     disp_p_df['Base'] = disp_p_df['Base'].map('{:,.0f}'.format)
     disp_p_df['SRs'] = disp_p_df['SRs'].map('{:,.0f}'.format)
@@ -302,18 +286,15 @@ with tab2:
     disp_p_df['Denials'] = disp_p_df['Denials'].map('{:,.0f}'.format)
     
     st.dataframe(disp_p_df, use_container_width=True, hide_index=True)
-    
-    fig_p_rate = px.bar(p_df, x='Product', y='100 Per Line', color='Tech', title='100 Per Line Rate by Specific Product', template="plotly_white", text_auto=True)
-    st.plotly_chart(fig_p_rate, use_container_width=True)
 
 with tab3:
     st.subheader("🗺️ Region-Wise Performance Summary")
 
     reg_summary = []
-    reg_base = base_df[(base_df['Date_Col_Standard'] == selected_date) & (~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else base_df[~base_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
-    reg_mttr = mttr_df[(mttr_df['Date_Col_Standard'] == selected_date) & (~mttr_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else mttr_df[~mttr_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
-    reg_repeat = repeat_df[(repeat_df['Date_Col_Standard'] == selected_date) & (~repeat_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else repeat_df[~repeat_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
-    reg_denial = denial_df[(denial_df['Date_Col_Standard'] == selected_date) & (~denial_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names))] if selected_date else denial_df[~denial_df['CRM_REGION_NM'].astype(str).str.strip().str.upper().isin(summary_names)]
+    reg_base = get_filtered_subset(clean_base)
+    reg_mttr = get_filtered_subset(clean_mttr)
+    reg_repeat = get_filtered_subset(clean_repeat)
+    reg_denial = get_filtered_subset(clean_denial)
 
     for reg in sorted(reg_base['CRM_REGION_NM'].dropna().unique()):
         b_sub = reg_base[reg_base['CRM_REGION_NM'] == reg]
@@ -348,6 +329,3 @@ with tab3:
         
     rdf = pd.DataFrame(reg_summary).sort_values(by="Total SRs", ascending=False)
     st.dataframe(rdf, use_container_width=True, hide_index=True)
-    
-    fig_reg = px.bar(rdf, x="Region", y=["MTTR (Hrs)", "100 Per Line"], barmode="group", title="Regional Comparison: MTTR vs 100 Per Line Rate", template="plotly_white")
-    st.plotly_chart(fig_reg, use_container_width=True)
